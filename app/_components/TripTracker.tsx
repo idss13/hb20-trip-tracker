@@ -631,7 +631,7 @@ export default function TripTracker() {
                 ))}
 
                 {historicoDisplay.map((r) => (
-                  <div key={r.id} className="bg-slate-800 rounded-2xl overflow-hidden">
+                  <div key={r.id} className="bg-slate-800 rounded-2xl">
 
                     {editingId === r.id ? (
                       <div className="px-5 py-4 space-y-3">
