@@ -5,6 +5,8 @@ import { savePending, getAllPending, deletePending, type PendingRecord } from '@
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+type Combustivel = 'gasolina' | 'etanol'
+
 interface Abastecimento {
   id: string
   created_at: string
@@ -14,6 +16,8 @@ interface Abastecimento {
   preco_por_litro: number | null
   cidade: string | null
   posto_nome: string | null
+  combustivel: Combustivel | null
+  estado: string | null
 }
 
 interface AbastecimentoEnriquecido extends Abastecimento {
@@ -35,6 +39,14 @@ interface EditState {
   km: string
   valor: string
   preco: string
+  combustivel: Combustivel
+}
+
+interface PrecosANP {
+  estado: string | null
+  gasolina: number | null
+  etanol: number | null
+  updated_at: string | null
 }
 
 type Tab = 'registrar' | 'dashboard' | 'historico'
@@ -84,8 +96,8 @@ function calcularMetricas(enriquecidos: AbastecimentoEnriquecido[]): Metricas {
       ? trechosCompletos[trechosCompletos.length - 1].consumo_trecho
       : null
 
-  const custoPorKm     = totalKmViagem > 0 ? parseFloat((totalGasto / totalKmViagem).toFixed(3)) : null
-  const precoMedioLitro = totalLitros > 0  ? parseFloat((totalGasto / totalLitros).toFixed(3))   : null
+  const custoPorKm      = totalKmViagem > 0 ? parseFloat((totalGasto / totalKmViagem).toFixed(3)) : null
+  const precoMedioLitro = totalLitros > 0   ? parseFloat((totalGasto / totalLitros).toFixed(3))   : null
 
   return { totalGasto, totalLitros, totalKmViagem, mediaConsumo, consumoUltimoTrecho, custoPorKm, precoMedioLitro }
 }
@@ -220,22 +232,29 @@ export default function TripTracker() {
   const [isOnline, setIsOnline]         = useState(true)
   const [gpsCapturing, setGpsCapturing] = useState(false)
 
-  const [km, setKm]       = useState('')
-  const [valor, setValor] = useState('')
-  const [preco, setPreco] = useState('')
-  const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null)
+  // Form state
+  const [km, setKm]                     = useState('')
+  const [valor, setValor]               = useState('')
+  const [preco, setPreco]               = useState('')
+  const [combustivel, setCombustivel]   = useState<Combustivel>('gasolina')
+  const [feedback, setFeedback]         = useState<{ type: 'success' | 'error'; msg: string } | null>(null)
 
+  // Data state
   const [historico, setHistorico]           = useState<Abastecimento[]>([])
   const [histLoading, setHistLoading]       = useState(true)
   const [pendingRecords, setPendingRecords] = useState<PendingRecord[]>([])
   const [pendingCount, setPendingCount]     = useState(0)
 
+  // Edit / delete UI state
   const [menuOpen, setMenuOpen]           = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [editingId, setEditingId]         = useState<string | null>(null)
-  const [editState, setEditState]         = useState<EditState>({ km: '', valor: '', preco: '' })
+  const [editState, setEditState]         = useState<EditState>({ km: '', valor: '', preco: '', combustivel: 'gasolina' })
 
-  const [distancia, setDistancia] = useState('')
+  // Dashboard predictive
+  const [distancia, setDistancia]                   = useState('')
+  const [combustivelPreditivo, setCombustivelPreditivo] = useState<Combustivel>('gasolina')
+  const [precosANP, setPrecosANP]                   = useState<PrecosANP | null>(null)
 
   const swRegistered  = useRef(false)
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -266,6 +285,15 @@ export default function TripTracker() {
     loadHistorico()
     loadPending()
   }, [loadHistorico, loadPending])
+
+  // Busca preços ANP para o estado do último abastecimento com GPS
+  useEffect(() => {
+    if (!ultimoEstado) return
+    fetch(`/api/precos?estado=${ultimoEstado}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => { if (data) setPrecosANP(data) })
+      .catch(() => {})
+  }, [ultimoEstado])
 
   const manualSync = useCallback(async () => {
     for (const record of await getAllPending()) {
@@ -323,24 +351,26 @@ export default function TripTracker() {
   const startEdit = (r: AbastecimentoEnriquecido) => {
     setEditingId(r.id)
     setEditState({
-      km:    String(r.km_atual),
-      valor: String(r.valor_pago),
-      preco: r.preco_por_litro != null ? String(r.preco_por_litro) : '',
+      km:          String(r.km_atual),
+      valor:       String(r.valor_pago),
+      preco:       r.preco_por_litro != null ? String(r.preco_por_litro) : '',
+      combustivel: r.combustivel ?? 'gasolina',
     })
     setMenuOpen(null)
   }
 
   const handleSaveEdit = async (id: string) => {
-    const km_atual        = parseInt(editState.km, 10)
-    const valor_pago      = parseFloat(editState.valor)
-    const preco_por_litro = editState.preco ? parseFloat(editState.preco) : null
+    const km_atual         = parseInt(editState.km, 10)
+    const valor_pago       = parseFloat(editState.valor)
+    const preco_por_litro  = editState.preco ? parseFloat(editState.preco) : null
+    const comb             = editState.combustivel
     const litros = preco_por_litro && preco_por_litro > 0
       ? parseFloat((valor_pago / preco_por_litro).toFixed(3))
       : null
 
     const original = historico.find((r) => r.id === id)
     setHistorico((prev) =>
-      prev.map((r) => r.id === id ? { ...r, km_atual, valor_pago, preco_por_litro, litros } : r)
+      prev.map((r) => r.id === id ? { ...r, km_atual, valor_pago, preco_por_litro, litros, combustivel: comb } : r)
     )
     setEditingId(null)
 
@@ -348,7 +378,7 @@ export default function TripTracker() {
       const res = await fetch(`/api/abastecer/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ km_atual, valor_pago, preco_por_litro }),
+        body: JSON.stringify({ km_atual, valor_pago, preco_por_litro, combustivel: comb }),
       })
       if (!res.ok) throw new Error('server')
     } catch {
@@ -361,16 +391,14 @@ export default function TripTracker() {
     e.preventDefault()
     if (!km || !valor) return
 
-    // Salva os valores antes de limpar o form
-    const savedKm    = km
-    const savedValor = valor
-    const savedPreco = preco
-    const precoFallback = savedPreco ? parseFloat(savedPreco) : metricas.precoMedioLitro ?? undefined
+    const savedKm         = km
+    const savedValor      = valor
+    const savedPreco      = preco
+    const savedCombustivel = combustivel
+    const precoFallback   = savedPreco ? parseFloat(savedPreco) : metricas.precoMedioLitro ?? undefined
 
-    // Libera o form imediatamente — usuário pode já digitar o próximo
     setKm(''); setValor(''); setPreco('')
 
-    // GPS roda em background (até 8s) enquanto o form já está livre
     setGpsCapturing(true)
     const coords = await getPosition()
     setGpsCapturing(false)
@@ -382,6 +410,7 @@ export default function TripTracker() {
       latitude:        coords?.lat ?? null,
       longitude:       coords?.lon ?? null,
       timestamp:       new Date().toISOString(),
+      combustivel:     savedCombustivel,
     }
 
     if (isOnline) {
@@ -413,6 +442,13 @@ export default function TripTracker() {
     () => [...enriquecidos].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
     [enriquecidos]
   )
+
+  // Estado (UF) do último abastecimento com GPS — usado para buscar preços ANP
+  const ultimoEstado = useMemo(
+    () => historicoDisplay.find((r) => r.estado != null)?.estado ?? null,
+    [historicoDisplay]
+  )
+
   const litrosEstimados = useMemo(() => {
     const d = parseFloat(distancia)
     const consumo = metricas.consumoUltimoTrecho ?? metricas.mediaConsumo
@@ -420,13 +456,32 @@ export default function TripTracker() {
     return parseFloat((d / consumo).toFixed(2))
   }, [distancia, metricas.consumoUltimoTrecho, metricas.mediaConsumo])
 
+  // Live ANP price for selected fuel, falling back to historical average
+  const precoParaCalculo = useMemo<number | null>(() => {
+    const livePrice = precosANP?.[combustivelPreditivo] ?? null
+    if (livePrice != null) return livePrice
+    return metricas.precoMedioLitro
+  }, [precosANP, combustivelPreditivo, metricas.precoMedioLitro])
+
+  const custoEstimado = useMemo<number | null>(() => {
+    if (!litrosEstimados || !precoParaCalculo) return null
+    return parseFloat((litrosEstimados * precoParaCalculo).toFixed(2))
+  }, [litrosEstimados, precoParaCalculo])
+
+  const fontePreco = useMemo(() => {
+    if (precosANP?.estado && precosANP[combustivelPreditivo] != null)
+      return `ANP (${precosANP.estado})`
+    if (metricas.precoMedioLitro != null) return 'média histórica'
+    return null
+  }, [precosANP, combustivelPreditivo, metricas.precoMedioLitro])
+
   const inputCls =
     'w-full bg-slate-800 border border-slate-700 rounded-2xl px-4 py-4 text-2xl font-mono text-white placeholder-slate-600 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors'
 
   const tabs: { id: Tab; label: string; icon: (a: boolean) => React.ReactNode }[] = [
-    { id: 'registrar', label: 'Registrar',  icon: (a) => <IconForm active={a} /> },
-    { id: 'dashboard', label: 'Dashboard',  icon: (a) => <IconDashboard active={a} /> },
-    { id: 'historico', label: 'Histórico',  icon: (a) => <IconHistory active={a} /> },
+    { id: 'registrar', label: 'Registrar', icon: (a) => <IconForm active={a} /> },
+    { id: 'dashboard', label: 'Dashboard', icon: (a) => <IconDashboard active={a} /> },
+    { id: 'historico', label: 'Histórico', icon: (a) => <IconHistory active={a} /> },
   ]
 
   return (
@@ -455,7 +510,7 @@ export default function TripTracker() {
           </div>
         </div>
 
-        {/* ── Banners globais (todas as abas) ── */}
+        {/* ── Banners globais ── */}
         <div className="space-y-2 mt-4 empty:mt-0">
           {!isOnline && (
             <div className="p-3 rounded-xl text-sm bg-yellow-500/10 text-yellow-300 border border-yellow-500/20">
@@ -486,13 +541,41 @@ export default function TripTracker() {
           <form onSubmit={handleSubmit} className="mt-6 space-y-3">
             <div>
               <label className="block text-sm font-medium text-slate-400 mb-1.5">Quilometragem Atual (KM)</label>
-              <input type="number" inputMode="numeric" value={km} onChange={(e) => setKm(e.target.value)}
-                placeholder="154230" required className={inputCls} />
+              <input
+                type="number" inputMode="numeric" value={km}
+                onChange={(e) => setKm(e.target.value)}
+                placeholder="154230" required className={inputCls}
+              />
             </div>
+
+            {/* Combustível */}
+            <div>
+              <label className="block text-sm font-medium text-slate-400 mb-1.5">Combustível</label>
+              <div className="flex rounded-2xl overflow-hidden border border-slate-700">
+                {(['gasolina', 'etanol'] as const).map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setCombustivel(c)}
+                    className={`flex-1 py-4 text-base font-semibold capitalize transition-colors ${
+                      combustivel === c
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-slate-800 text-slate-400 active:bg-slate-700'
+                    }`}
+                  >
+                    {c === 'gasolina' ? 'Gasolina' : 'Etanol'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div>
               <label className="block text-sm font-medium text-slate-400 mb-1.5">Valor Pago (R$)</label>
-              <input type="number" inputMode="decimal" step="0.01" value={valor}
-                onChange={(e) => setValor(e.target.value)} placeholder="80,00" required className={inputCls} />
+              <input
+                type="number" inputMode="decimal" step="0.01" value={valor}
+                onChange={(e) => setValor(e.target.value)}
+                placeholder="80,00" required className={inputCls}
+              />
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-400 mb-1.5">
@@ -501,11 +584,16 @@ export default function TripTracker() {
                   opcional{metricas.precoMedioLitro ? ` — média: R$ ${metricas.precoMedioLitro.toFixed(3)}` : ''}
                 </span>
               </label>
-              <input type="number" inputMode="decimal" step="0.001" value={preco}
-                onChange={(e) => setPreco(e.target.value)} placeholder="3,890" className={inputCls} />
+              <input
+                type="number" inputMode="decimal" step="0.001" value={preco}
+                onChange={(e) => setPreco(e.target.value)}
+                placeholder="3,890" className={inputCls}
+              />
             </div>
-            <button type="submit" disabled={gpsCapturing}
-              className="w-full bg-blue-600 active:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-lg py-5 rounded-2xl transition-colors mt-1 shadow-lg shadow-blue-950/60 select-none">
+            <button
+              type="submit" disabled={gpsCapturing}
+              className="w-full bg-blue-600 active:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-lg py-5 rounded-2xl transition-colors mt-1 shadow-lg shadow-blue-950/60 select-none"
+            >
               Registrar Abastecimento
             </button>
           </form>
@@ -520,9 +608,41 @@ export default function TripTracker() {
 
             {/* Calculadora Preditiva */}
             <div className="bg-slate-800 rounded-2xl p-5 border border-slate-700">
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-4">
-                Cálculo Preditivo
-              </p>
+              <div className="flex items-baseline gap-2 mb-4">
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest">
+                  Cálculo Preditivo
+                </p>
+                {precosANP?.estado && (
+                  <span className="text-xs text-slate-600">· preços em {precosANP.estado} (ANP)</span>
+                )}
+              </div>
+
+              {/* Seletor de combustível com preços ANP */}
+              <div className="flex gap-2 mb-4">
+                {(['gasolina', 'etanol'] as const).map((c) => {
+                  const livePrice = precosANP && precosANP[c]
+                  return (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setCombustivelPreditivo(c)}
+                      className={`flex-1 py-2.5 rounded-xl text-xs font-semibold transition-colors border capitalize ${
+                        combustivelPreditivo === c
+                          ? 'bg-blue-600/15 text-blue-300 border-blue-500/30'
+                          : 'bg-slate-700 text-slate-500 border-slate-600 active:bg-slate-600'
+                      }`}
+                    >
+                      {c}
+                      {livePrice != null && (
+                        <span className={`block font-bold text-sm mt-0.5 ${combustivelPreditivo === c ? 'text-blue-200' : 'text-slate-400'}`}>
+                          R$ {(livePrice as number).toFixed(3)}/L
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+
               <label className="block text-sm text-slate-400 mb-2">
                 Distância até o próximo destino (km)
               </label>
@@ -532,8 +652,14 @@ export default function TripTracker() {
                 placeholder="150"
                 className="w-full bg-slate-700 border border-slate-600 rounded-xl px-4 py-3 text-2xl font-mono text-white placeholder-slate-600 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
               />
+
+              {!ultimoEstado && (
+                <p className="text-xs text-slate-600 mb-3">
+                  Ative o GPS no primeiro abastecimento para ver preços do seu estado.
+                </p>
+              )}
               {litrosEstimados != null ? (
-                <div className="mt-4 space-y-1">
+                <div className="mt-4 space-y-1.5">
                   <p className="text-sm text-slate-400">
                     Consumo estimado:{' '}
                     <span className="font-bold text-white text-base">{litrosEstimados} L</span>
@@ -541,15 +667,20 @@ export default function TripTracker() {
                       ({metricas.consumoUltimoTrecho ? 'último trecho' : 'média geral'})
                     </span>
                   </p>
-                  {metricas.precoMedioLitro != null && (
+                  {custoEstimado != null && precoParaCalculo != null ? (
                     <p className="text-sm text-slate-400">
                       Custo estimado:{' '}
                       <span className="font-bold text-green-400 text-base">
-                        R$&nbsp;{brl(litrosEstimados * metricas.precoMedioLitro)}
+                        R$&nbsp;{brl(custoEstimado)}
                       </span>
                       <span className="text-slate-600 ml-1 text-xs">
-                        @ R$&nbsp;{metricas.precoMedioLitro.toFixed(3)}/L
+                        @ R$&nbsp;{precoParaCalculo.toFixed(3)}/L
+                        {fontePreco && ` · ${fontePreco}`}
                       </span>
+                    </p>
+                  ) : (
+                    <p className="text-xs text-slate-600">
+                      Registre o preço por litro para ver o custo estimado.
                     </p>
                   )}
                 </div>
@@ -569,12 +700,12 @@ export default function TripTracker() {
               </h2>
               <div className="bg-slate-800 rounded-2xl overflow-hidden">
                 {[
-                  { label: 'Total Gasto',     value: `R$ ${brl(metricas.totalGasto)}`,                                                              color: 'text-green-400' },
-                  { label: 'Km Rodados',      value: metricas.totalKmViagem > 0 ? `${metricas.totalKmViagem.toLocaleString('pt-BR')} km` : '—',     color: 'text-blue-400' },
-                  { label: 'Total de Litros', value: metricas.totalLitros > 0 ? `${metricas.totalLitros.toFixed(1)} L` : '—',                       color: 'text-sky-400' },
-                  { label: 'Preço médio/L',   value: metricas.precoMedioLitro ? `R$ ${metricas.precoMedioLitro.toFixed(3)}` : '—',                  color: 'text-amber-400' },
-                  { label: 'Custo por km',    value: metricas.custoPorKm ? `R$ ${metricas.custoPorKm.toFixed(3)}` : '—',                            color: 'text-orange-400' },
-                  { label: 'Média geral',     value: metricas.mediaConsumo ? `${metricas.mediaConsumo} km/L` : '—',                                 color: 'text-purple-400' },
+                  { label: 'Total Gasto',     value: `R$ ${brl(metricas.totalGasto)}`,                                                          color: 'text-green-400' },
+                  { label: 'Km Rodados',      value: metricas.totalKmViagem > 0 ? `${metricas.totalKmViagem.toLocaleString('pt-BR')} km` : '—', color: 'text-blue-400' },
+                  { label: 'Total de Litros', value: metricas.totalLitros > 0 ? `${metricas.totalLitros.toFixed(1)} L` : '—',                   color: 'text-sky-400' },
+                  { label: 'Preço médio/L',   value: metricas.precoMedioLitro ? `R$ ${metricas.precoMedioLitro.toFixed(3)}` : '—',              color: 'text-amber-400' },
+                  { label: 'Custo por km',    value: metricas.custoPorKm ? `R$ ${metricas.custoPorKm.toFixed(3)}` : '—',                        color: 'text-orange-400' },
+                  { label: 'Média geral',     value: metricas.mediaConsumo ? `${metricas.mediaConsumo} km/L` : '—',                             color: 'text-purple-400' },
                   {
                     label: 'Último trecho',
                     value: metricas.consumoUltimoTrecho
@@ -583,8 +714,10 @@ export default function TripTracker() {
                     color: corConsumo(metricas.consumoUltimoTrecho ?? 0, metricas.mediaConsumo),
                   },
                 ].map((item, i, arr) => (
-                  <div key={item.label}
-                    className={`flex items-center justify-between px-5 py-4 ${i < arr.length - 1 ? 'border-b border-slate-700' : ''}`}>
+                  <div
+                    key={item.label}
+                    className={`flex items-center justify-between px-5 py-4 ${i < arr.length - 1 ? 'border-b border-slate-700' : ''}`}
+                  >
                     <span className="text-sm text-slate-400">{item.label}</span>
                     <span className={`text-base font-bold ${item.color}`}>{item.value}</span>
                   </div>
@@ -606,6 +739,7 @@ export default function TripTracker() {
             ) : (
               <div className="space-y-4">
 
+                {/* Pending (offline) records */}
                 {pendingRecords.map((r) => (
                   <div key={`pending-${r.id}`} className="bg-slate-800 rounded-2xl overflow-hidden border border-yellow-500/20">
                     <div className="flex items-start justify-between gap-3 px-5 pt-4 pb-3">
@@ -622,14 +756,22 @@ export default function TripTracker() {
                         <p className="text-xs text-slate-500 mt-1">{r.km_atual.toLocaleString('pt-BR')} km</p>
                       </div>
                     </div>
-                    {r.preco_por_litro != null && (
-                      <div className="border-t border-slate-700 px-5 py-2">
-                        <span className="text-sm text-slate-400">R$&nbsp;{r.preco_por_litro.toFixed(3)}/L</span>
+                    {(r.combustivel || r.preco_por_litro != null) && (
+                      <div className="border-t border-slate-700 px-5 py-2 flex gap-3 items-center">
+                        {r.combustivel && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-slate-700 border border-slate-600 text-slate-400 capitalize">
+                            {r.combustivel}
+                          </span>
+                        )}
+                        {r.preco_por_litro != null && (
+                          <span className="text-sm text-slate-400">R$&nbsp;{r.preco_por_litro.toFixed(3)}/L</span>
+                        )}
                       </div>
                     )}
                   </div>
                 ))}
 
+                {/* Synced records */}
                 {historicoDisplay.map((r) => (
                   <div key={r.id} className="bg-slate-800 rounded-2xl">
 
@@ -638,29 +780,58 @@ export default function TripTracker() {
                         <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest">Editar registro</p>
                         <div>
                           <label className="block text-xs text-slate-400 mb-1">KM atual</label>
-                          <input type="number" inputMode="numeric" value={editState.km}
+                          <input
+                            type="number" inputMode="numeric" value={editState.km}
                             onChange={(e) => setEditState((s) => ({ ...s, km: e.target.value }))}
-                            className="w-full bg-slate-700 border border-slate-600 rounded-xl px-3 py-3 text-lg font-mono text-white focus:outline-none focus:border-blue-500" />
+                            className="w-full bg-slate-700 border border-slate-600 rounded-xl px-3 py-3 text-lg font-mono text-white focus:outline-none focus:border-blue-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-slate-400 mb-1">Combustível</label>
+                          <div className="flex rounded-xl overflow-hidden border border-slate-600">
+                            {(['gasolina', 'etanol'] as const).map((c) => (
+                              <button
+                                key={c}
+                                type="button"
+                                onClick={() => setEditState((s) => ({ ...s, combustivel: c }))}
+                                className={`flex-1 py-3 text-sm font-semibold capitalize transition-colors ${
+                                  editState.combustivel === c
+                                    ? 'bg-blue-600 text-white'
+                                    : 'bg-slate-700 text-slate-400 active:bg-slate-600'
+                                }`}
+                              >
+                                {c}
+                              </button>
+                            ))}
+                          </div>
                         </div>
                         <div>
                           <label className="block text-xs text-slate-400 mb-1">Valor pago (R$)</label>
-                          <input type="number" inputMode="decimal" step="0.01" value={editState.valor}
+                          <input
+                            type="number" inputMode="decimal" step="0.01" value={editState.valor}
                             onChange={(e) => setEditState((s) => ({ ...s, valor: e.target.value }))}
-                            className="w-full bg-slate-700 border border-slate-600 rounded-xl px-3 py-3 text-lg font-mono text-white focus:outline-none focus:border-blue-500" />
+                            className="w-full bg-slate-700 border border-slate-600 rounded-xl px-3 py-3 text-lg font-mono text-white focus:outline-none focus:border-blue-500"
+                          />
                         </div>
                         <div>
                           <label className="block text-xs text-slate-400 mb-1">Preço/litro (opcional)</label>
-                          <input type="number" inputMode="decimal" step="0.001" value={editState.preco}
+                          <input
+                            type="number" inputMode="decimal" step="0.001" value={editState.preco}
                             onChange={(e) => setEditState((s) => ({ ...s, preco: e.target.value }))}
-                            className="w-full bg-slate-700 border border-slate-600 rounded-xl px-3 py-3 text-lg font-mono text-white focus:outline-none focus:border-blue-500" />
+                            className="w-full bg-slate-700 border border-slate-600 rounded-xl px-3 py-3 text-lg font-mono text-white focus:outline-none focus:border-blue-500"
+                          />
                         </div>
                         <div className="flex gap-2 pt-1">
-                          <button onClick={() => handleSaveEdit(r.id)}
-                            className="flex-1 bg-blue-600 active:bg-blue-700 text-white font-semibold py-3 rounded-xl text-sm transition-colors">
+                          <button
+                            onClick={() => handleSaveEdit(r.id)}
+                            className="flex-1 bg-blue-600 active:bg-blue-700 text-white font-semibold py-3 rounded-xl text-sm transition-colors"
+                          >
                             Salvar
                           </button>
-                          <button onClick={() => setEditingId(null)}
-                            className="flex-1 bg-slate-700 active:bg-slate-600 text-slate-300 font-semibold py-3 rounded-xl text-sm transition-colors">
+                          <button
+                            onClick={() => setEditingId(null)}
+                            className="flex-1 bg-slate-700 active:bg-slate-600 text-slate-300 font-semibold py-3 rounded-xl text-sm transition-colors"
+                          >
                             Cancelar
                           </button>
                         </div>
@@ -670,12 +841,16 @@ export default function TripTracker() {
                       <div className="px-5 py-5 flex flex-col gap-3">
                         <p className="text-sm text-slate-300">Apagar este registro?</p>
                         <div className="flex gap-2">
-                          <button onClick={() => handleDelete(r.id)}
-                            className="flex-1 bg-red-600 active:bg-red-700 text-white font-semibold py-3 rounded-xl text-sm transition-colors">
+                          <button
+                            onClick={() => handleDelete(r.id)}
+                            className="flex-1 bg-red-600 active:bg-red-700 text-white font-semibold py-3 rounded-xl text-sm transition-colors"
+                          >
                             Apagar
                           </button>
-                          <button onClick={() => setConfirmDelete(null)}
-                            className="flex-1 bg-slate-700 active:bg-slate-600 text-slate-300 font-semibold py-3 rounded-xl text-sm transition-colors">
+                          <button
+                            onClick={() => setConfirmDelete(null)}
+                            className="flex-1 bg-slate-700 active:bg-slate-600 text-slate-300 font-semibold py-3 rounded-xl text-sm transition-colors"
+                          >
                             Cancelar
                           </button>
                         </div>
@@ -687,6 +862,9 @@ export default function TripTracker() {
                           <div className="min-w-0">
                             <p className="text-base font-semibold text-white truncate">
                               {r.cidade ?? 'Local desconhecido'}
+                              {r.estado && (
+                                <span className="ml-1.5 text-xs font-normal text-slate-500">{r.estado}</span>
+                              )}
                             </p>
                             {r.posto_nome && (
                               <p className="text-sm text-slate-400 truncate mt-1">{r.posto_nome}</p>
@@ -704,20 +882,27 @@ export default function TripTracker() {
                               <button
                                 onClick={(e) => { e.stopPropagation(); setMenuOpen(menuOpen === r.id ? null : r.id) }}
                                 className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-500 active:bg-slate-700 transition-colors"
-                                aria-label="Ações">
+                                aria-label="Ações"
+                              >
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                                   <circle cx="5" cy="12" r="2.2" /><circle cx="12" cy="12" r="2.2" /><circle cx="19" cy="12" r="2.2" />
                                 </svg>
                               </button>
                               {menuOpen === r.id && (
-                                <div onClick={(e) => e.stopPropagation()}
-                                  className="absolute right-0 top-9 z-20 bg-slate-700 border border-slate-600 rounded-xl shadow-xl overflow-hidden min-w-[130px]">
-                                  <button onClick={() => startEdit(r)}
-                                    className="w-full text-left px-4 py-3 text-sm text-slate-200 active:bg-slate-600 transition-colors border-b border-slate-600">
+                                <div
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="absolute right-0 top-9 z-20 bg-slate-700 border border-slate-600 rounded-xl shadow-xl overflow-hidden min-w-[130px]"
+                                >
+                                  <button
+                                    onClick={() => startEdit(r)}
+                                    className="w-full text-left px-4 py-3 text-sm text-slate-200 active:bg-slate-600 transition-colors border-b border-slate-600"
+                                  >
                                     Editar
                                   </button>
-                                  <button onClick={() => { setConfirmDelete(r.id); setMenuOpen(null) }}
-                                    className="w-full text-left px-4 py-3 text-sm text-red-400 active:bg-slate-600 transition-colors">
+                                  <button
+                                    onClick={() => { setConfirmDelete(r.id); setMenuOpen(null) }}
+                                    className="w-full text-left px-4 py-3 text-sm text-red-400 active:bg-slate-600 transition-colors"
+                                  >
                                     Apagar
                                   </button>
                                 </div>
@@ -726,9 +911,14 @@ export default function TripTracker() {
                           </div>
                         </div>
 
-                        {(r.litros != null || r.preco_por_litro != null || r.km_rodados != null) && (
+                        {(r.litros != null || r.preco_por_litro != null || r.km_rodados != null || r.combustivel != null) && (
                           <div className="border-t border-slate-700 px-5 py-3 flex items-center justify-between gap-4">
-                            <div className="flex gap-4 text-sm text-slate-400">
+                            <div className="flex gap-3 text-sm text-slate-400 items-center flex-wrap">
+                              {r.combustivel && (
+                                <span className="text-xs px-2 py-0.5 rounded-full bg-slate-700 border border-slate-600 text-slate-400 capitalize">
+                                  {r.combustivel}
+                                </span>
+                              )}
                               {r.litros != null && <span>{r.litros.toFixed(2)} L</span>}
                               {r.preco_por_litro != null && <span>R$&nbsp;{r.preco_por_litro.toFixed(3)}/L</span>}
                               {r.km_rodados != null && <span>+{r.km_rodados.toLocaleString('pt-BR')} km</span>}

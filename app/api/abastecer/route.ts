@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import pool from '@/lib/db'
+import { estadoFromNominatim } from '@/lib/anp'
 
 interface Payload {
   km_atual: number
@@ -9,6 +10,7 @@ interface Payload {
   latitude?: number | null
   longitude?: number | null
   timestamp?: string
+  combustivel?: 'gasolina' | 'etanol'
 }
 
 async function reverseGeocode(lat: number, lon: number) {
@@ -20,15 +22,16 @@ async function reverseGeocode(lat: number, lon: number) {
         signal: AbortSignal.timeout(5000),
       }
     )
-    if (!res.ok) return { cidade: null, posto_nome: null }
+    if (!res.ok) return { cidade: null, posto_nome: null, estado: null }
     const data = await res.json()
     const addr = data.address ?? {}
     return {
-      cidade: addr.city ?? addr.town ?? addr.village ?? addr.county ?? null,
+      cidade:     addr.city ?? addr.town ?? addr.village ?? addr.county ?? null,
       posto_nome: addr.amenity ?? addr.name ?? null,
+      estado:     estadoFromNominatim(addr),
     }
   } catch {
-    return { cidade: null, posto_nome: null }
+    return { cidade: null, posto_nome: null, estado: null }
   }
 }
 
@@ -40,7 +43,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'JSON inválido' }, { status: 400 })
   }
 
-  const { km_atual, valor_pago, preco_por_litro, latitude, longitude } = body
+  const { km_atual, valor_pago, preco_por_litro, latitude, longitude, combustivel } = body
 
   if (!km_atual || !valor_pago) {
     return NextResponse.json({ error: 'km_atual e valor_pago são obrigatórios' }, { status: 400 })
@@ -51,19 +54,21 @@ export async function POST(request: NextRequest) {
     litros = parseFloat((valor_pago / preco_por_litro).toFixed(3))
   }
 
-  let cidade: string | null = null
+  let cidade: string | null     = null
   let posto_nome: string | null = null
+  let estado: string | null     = null
   if (latitude != null && longitude != null) {
-    ;({ cidade, posto_nome } = await reverseGeocode(latitude, longitude))
+    ;({ cidade, posto_nome, estado } = await reverseGeocode(latitude, longitude))
   }
 
   const { rows } = await pool.query(
     `INSERT INTO abastecimentos
-       (km_atual, valor_pago, litros, preco_por_litro, latitude, longitude, cidade, posto_nome)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       (km_atual, valor_pago, litros, preco_por_litro, latitude, longitude, cidade, posto_nome, combustivel, estado)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      RETURNING *`,
     [km_atual, valor_pago, litros, preco_por_litro ?? null,
-     latitude ?? null, longitude ?? null, cidade, posto_nome]
+     latitude ?? null, longitude ?? null, cidade, posto_nome,
+     combustivel ?? 'gasolina', estado]
   )
 
   return NextResponse.json(rows[0], { status: 201 })

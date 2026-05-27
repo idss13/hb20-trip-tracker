@@ -15,6 +15,7 @@ export interface PendingRecord {
   latitude?: number | null
   longitude?: number | null
   timestamp: string
+  combustivel?: 'gasolina' | 'etanol'
 }
 
 function getDB() {

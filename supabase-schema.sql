@@ -11,7 +11,9 @@ CREATE TABLE IF NOT EXISTS public.abastecimentos (
   latitude         FLOAT,
   longitude        FLOAT,
   posto_nome       TEXT,
-  cidade           TEXT
+  cidade           TEXT,
+  combustivel      TEXT        DEFAULT 'gasolina',
+  estado           TEXT
 );
 
 -- Índice para ordenação por data (usado na query de histórico)
@@ -24,6 +26,23 @@ ALTER TABLE public.abastecimentos ENABLE ROW LEVEL SECURITY;
 -- Política permissiva — app pessoal sem autenticação.
 -- A API usa a service role key (bypassa RLS), então esta política
 -- só entra em jogo se você adicionar autenticação depois.
+DROP POLICY IF EXISTS "allow_all_service_role" ON public.abastecimentos;
 CREATE POLICY "allow_all_service_role" ON public.abastecimentos
   USING (true)
   WITH CHECK (true);
+
+-- Migração: adicionar colunas em banco já existente
+ALTER TABLE public.abastecimentos
+  ADD COLUMN IF NOT EXISTS combustivel TEXT DEFAULT 'gasolina';
+ALTER TABLE public.abastecimentos
+  ADD COLUMN IF NOT EXISTS estado TEXT;
+
+-- Tabela para preços médios de combustível (atualizados via Cron Job)
+CREATE TABLE IF NOT EXISTS public.precos_combustivel (
+  id          SERIAL PRIMARY KEY,
+  updated_at  TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  estado      TEXT        NOT NULL,
+  combustivel TEXT        NOT NULL,
+  preco_medio FLOAT       NOT NULL,
+  UNIQUE (estado, combustivel)
+);

@@ -4,7 +4,7 @@ import pool from '@/lib/db'
 export async function GET() {
   try {
     const { rows } = await pool.query(
-      `SELECT id, created_at, km_atual, valor_pago, litros, preco_por_litro, cidade, posto_nome
+      `SELECT id, created_at, km_atual, valor_pago, litros, preco_por_litro, cidade, posto_nome, combustivel, estado
        FROM abastecimentos
        ORDER BY created_at DESC
        LIMIT 100`
