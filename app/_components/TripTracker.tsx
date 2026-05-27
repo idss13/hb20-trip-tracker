@@ -286,15 +286,6 @@ export default function TripTracker() {
     loadPending()
   }, [loadHistorico, loadPending])
 
-  // Busca preços ANP para o estado do último abastecimento com GPS
-  useEffect(() => {
-    if (!ultimoEstado) return
-    fetch(`/api/precos?estado=${ultimoEstado}`)
-      .then((r) => r.ok ? r.json() : null)
-      .then((data) => { if (data) setPrecosANP(data) })
-      .catch(() => {})
-  }, [ultimoEstado])
-
   const manualSync = useCallback(async () => {
     for (const record of await getAllPending()) {
       try {
@@ -448,6 +439,15 @@ export default function TripTracker() {
     () => historicoDisplay.find((r) => r.estado != null)?.estado ?? null,
     [historicoDisplay]
   )
+
+  // Busca preços ANP para o estado do último abastecimento com GPS
+  useEffect(() => {
+    if (!ultimoEstado) return
+    fetch(`/api/precos?estado=${ultimoEstado}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => { if (data) setPrecosANP(data) })
+      .catch(() => {})
+  }, [ultimoEstado])
 
   const litrosEstimados = useMemo(() => {
     const d = parseFloat(distancia)
